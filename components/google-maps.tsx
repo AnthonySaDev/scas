@@ -1,327 +1,108 @@
-import { GoogleMap, LoadScript, Marker, InfoWindow, DirectionsRenderer } from '@react-google-maps/api'
-import { useState, useEffect } from 'react'
-import { Defibrillator } from '@/types/types'
-interface GoogleMapsProps {
-  radius: number
-  setLatitude: (lat: number) => void
-  setLongitude: (lng: number) => void
-  latitude: number
-  longitude: number
-  style: { width: string; height: string }
-  address: string
-  setAddress: (address: string) => void
-  defibrillators: Defibrillator[]
-  apiKey: string
+"use client"
+import { useEffect, useState } from 'react'
+import { LoadScript, GoogleMap, Marker } from '@react-google-maps/api'
+import { SquareActivity } from 'lucide-react'
+
+const mapContainerStyle = {
+  width: '100%',
+  height: '100%'
 }
 
-const isClient = typeof window !== 'undefined'
+interface GoogleMapsProps {
+  latitude: number;
+  longitude: number;
+  radius?: number;
+  setLatitude: (lat: number) => void;
+  setLongitude: (lng: number) => void;
+  style?: React.CSSProperties;
+  address?: string;
+  setAddress?: (address: string) => void;
+  defibrillators: Array<{ id: string; latitude: string; longitude: string }>;
+  apiKey: string;
+  mapRef?: React.MutableRefObject<google.maps.Map | null>;
+  markerIcon?: google.maps.Icon;
+}
 
-export default function GoogleMaps({
+const createMarkerIcon = (isUser: boolean = false) => {
+  const svgString = isUser 
+    ? `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="#DC2626" stroke="#991B1B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><line x1="22" y1="22" x2="18" y2="18"/></svg>`
+    : `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="#DC2626" stroke="#991B1B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 7h18M3 12h18M3 17h18M7 21V3M12 21V3M17 21V3"/></svg>`;
+  
+  return {
+    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svgString)}`,
+    scaledSize: new google.maps.Size(32, 32),
+    origin: new google.maps.Point(0, 0),
+    anchor: new google.maps.Point(16, 16)
+  };
+}
+
+const GoogleMaps = ({
+  latitude,
+  longitude,
   radius,
   setLatitude,
   setLongitude,
-  latitude,
-  longitude,
   style,
   address,
   setAddress,
   defibrillators,
-  apiKey
-}: GoogleMapsProps) {
-  const [selectedDefibrillator, setSelectedDefibrillator] = useState<Defibrillator | null>(null)
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
-  const [locationError, setLocationError] = useState<string>('')
-  const [isLocationPermissionGranted, setIsLocationPermissionGranted] = useState(false)
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null)
-  const [nearestDefibrillator, setNearestDefibrillator] = useState<Defibrillator | null>(null)
-
-  const defaultIconConfig = {
-    url: '',
-    scaledSize: undefined as google.maps.Size | undefined,
-    origin: undefined as google.maps.Point | undefined,
-    anchor: undefined as google.maps.Point | undefined
+  apiKey,
+  mapRef,
+  markerIcon
+}: GoogleMapsProps) => {
+  const center = {
+    lat: latitude,
+    lng: longitude
   }
 
-  const [defibrillatorIcon, setDefibrillatorIcon] = useState(defaultIconConfig)
-  const [userLocationIcon, setUserLocationIcon] = useState(defaultIconConfig)
+  const options = {
+    disableDefaultUI: false,
+    zoomControl: true
+  }
+
+  const [userMarker, setUserMarker] = useState<google.maps.Icon | null>(null);
+  const [defibMarker, setDefibMarker] = useState<google.maps.Icon | null>(null);
 
   useEffect(() => {
-    if (isClient && window.google?.maps) {
-      setDefibrillatorIcon({
-        url: '/defibrillator-marker.png',
-        scaledSize: new window.google.maps.Size(40, 40),
-        origin: new window.google.maps.Point(0, 0),
-        anchor: new window.google.maps.Point(20, 40)
-      })
-
-      setUserLocationIcon({
-        url: '/user-location.png',
-        scaledSize: new window.google.maps.Size(30, 30),
-        origin: new window.google.maps.Point(0, 0),
-        anchor: new window.google.maps.Point(15, 15)
-      })
+    if (typeof google !== 'undefined') {
+      setUserMarker(createMarkerIcon(true));
+      setDefibMarker(createMarkerIcon(false));
     }
-  }, [isClient])
-
-  // Função para solicitar permissão de localização
-  const requestLocationPermission = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setUserLocation({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          })
-          setIsLocationPermissionGranted(true)
-          setLocationError('')
-        },
-        (error) => {
-          let errorMessage = 'Erro ao obter localização'
-          switch (error.code) {
-            case error.PERMISSION_DENIED:
-              errorMessage = 'Você precisa permitir o acesso à sua localização para encontrar o desfibrilador mais próximo.'
-              break
-            case error.POSITION_UNAVAILABLE:
-              errorMessage = 'Informação de localização indisponível.'
-              break
-            case error.TIMEOUT:
-              errorMessage = 'Tempo esgotado ao tentar obter localização.'
-              break
-          }
-          setLocationError(errorMessage)
-          setIsLocationPermissionGranted(false)
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 5000,
-          maximumAge: 0
-        }
-      )
-    } else {
-      setLocationError('Seu navegador não suporta geolocalização.')
-    }
-  }
-
-  // Solicitar localização ao montar o componente
-  useEffect(() => {
-    requestLocationPermission()
-  }, [])
-
-  // Encontrar o desfibrilador mais próximo
-  const findNearestDefibrillator = (): Defibrillator | null => {
-    if (!userLocation) return null
-
-    let nearest: Defibrillator | null = null
-    let shortestDistance = Infinity
-
-    defibrillators.forEach((def) => {
-      const lat = parseFloat(def.latitude)
-      const lng = parseFloat(def.longitude)
-      
-      if (isNaN(lat) || isNaN(lng)) return
-
-      const distance = calculateDistance(
-        userLocation.lat,
-        userLocation.lng,
-        lat,
-        lng
-      )
-
-      if (distance < shortestDistance) {
-        shortestDistance = distance
-        nearest = def
-      }
-    })
-
-    return nearest
-  }
-
-  // Calcular distância entre dois pontos
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371 // Raio da Terra em km
-    const dLat = deg2rad(lat2 - lat1)
-    const dLon = deg2rad(lon2 - lon1)
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
-      Math.sin(dLon / 2) * Math.sin(dLon / 2)
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-    return R * c
-  }
-
-  const deg2rad = (deg: number) => {
-    return deg * (Math.PI / 180)
-  }
-
-  // Traçar rota para o desfibrilador mais próximo
-  const getDirectionsToNearest = () => {
-    if (!userLocation) {
-      alert("Não foi possível obter sua localização. Por favor, permita o acesso à localização.")
-      return
-    }
-    
-    const nearest = findNearestDefibrillator()
-    if (!nearest) {
-      alert("Não foi possível encontrar um desfibrilador próximo.")
-      return
-    }
-
-    const directionsService = new google.maps.DirectionsService()
-
-    directionsService.route(
-      {
-        origin: userLocation,
-        destination: {
-          lat: parseFloat(nearest.latitude),
-          lng: parseFloat(nearest.longitude)
-        },
-        travelMode: google.maps.TravelMode.DRIVING
-      },
-      (result, status) => {
-        if (status === google.maps.DirectionsStatus.OK) {
-          setDirections(result)
-          setNearestDefibrillator(nearest)
-          setSelectedDefibrillator(nearest) // Mostra info do desfibrilador selecionado
-        } else {
-          alert("Erro ao calcular a rota. Tente novamente.")
-          console.error(`Erro ao traçar rota: ${status}`)
-        }
-      }
-    )
-  }
-
-  const mapApiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY as string;
+  }, []);
 
   return (
-    <div className="relative w-full">
-      {locationError && (
-        <div className="absolute top-4 left-4 right-4 z-10 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          <p className="flex items-center">
-            <svg className="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-            </svg>
-            {locationError}
-            <button 
-              onClick={requestLocationPermission}
-              className="ml-auto bg-red-200 px-2 py-1 rounded hover:bg-red-300"
-            >
-              Permitir Localização
-            </button>
-          </p>
-        </div>
-      )}
-
-      <LoadScript googleMapsApiKey={mapApiKey}>
+    <div style={style || mapContainerStyle}>
+      <LoadScript googleMapsApiKey={apiKey}>
         <GoogleMap
-          mapContainerStyle={style}
-          center={userLocation || { lat: latitude, lng: longitude }}
-          zoom={13}
-          options={{
-            zoomControl: true,
-            streetViewControl: false,
-            mapTypeControl: false,
-            fullscreenControl: false
-          }}
-          onLoad={(map) => {
-            // Aqui podemos definir os ícones após o carregamento do mapa
-            if (window.google?.maps) {
-              defibrillatorIcon.scaledSize = new window.google.maps.Size(40, 40)
-              defibrillatorIcon.origin = new window.google.maps.Point(0, 0)
-              defibrillatorIcon.anchor = new window.google.maps.Point(20, 40)
-
-              userLocationIcon.scaledSize = new window.google.maps.Size(30, 30)
-              userLocationIcon.origin = new window.google.maps.Point(0, 0)
-              userLocationIcon.anchor = new window.google.maps.Point(15, 15)
+          mapContainerStyle={mapContainerStyle}
+          center={center}
+          zoom={14}
+          options={options}
+          onLoad={map => {
+            if (mapRef) {
+              mapRef.current = map
             }
           }}
         >
-          {/* Marcador da localização do usuário */}
-          {userLocation && (
+          <Marker
+            position={center}
+            icon={userMarker || undefined}
+          />
+
+          {defibrillators.map((def) => (
             <Marker
-              position={userLocation}
-              icon={userLocationIcon}
-              title="Sua localização"
-            />
-          )}
-
-          {/* Marcadores dos desfibriladores */}
-          {defibrillators.map((def) => {
-            const lat = parseFloat(def.latitude)
-            const lng = parseFloat(def.longitude)
-            
-            if (isNaN(lat) || isNaN(lng)) return null
-            
-            return (
-              <Marker
-                key={def.id}
-                position={{ lat, lng }}
-                icon={defibrillatorIcon}
-                onClick={() => setSelectedDefibrillator(def)}
-                title={def.nome}
-              />
-            )
-          })}
-
-          {/* InfoWindow do desfibrilador selecionado */}
-          {selectedDefibrillator && (
-            <InfoWindow
+              key={def.id}
               position={{
-                lat: parseFloat(selectedDefibrillator.latitude),
-                lng: parseFloat(selectedDefibrillator.longitude)
+                lat: parseFloat(def.latitude),
+                lng: parseFloat(def.longitude)
               }}
-              onCloseClick={() => setSelectedDefibrillator(null)}
-            >
-              <div className="p-2">
-                <h3 className="font-bold text-lg mb-1">{selectedDefibrillator.nome}</h3>
-                <p className="text-sm mb-1">
-                  {selectedDefibrillator.rua}, {selectedDefibrillator.numero}
-                </p>
-                <p className="text-sm mb-2">{selectedDefibrillator.bairro}</p>
-                {userLocation && (
-                  <button
-                    onClick={() => getDirectionsToNearest()}
-                    className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
-                  >
-                    Traçar Rota
-                  </button>
-                )}
-              </div>
-            </InfoWindow>
-          )}
-
-          {/* Renderizar a rota */}
-          {directions && (
-            <DirectionsRenderer
-              directions={directions}
-              options={{
-                suppressMarkers: true,
-                polylineOptions: {
-                  strokeColor: '#dc2626',
-                  strokeWeight: 5
-                }
-              }}
+              icon={defibMarker || undefined}
             />
-          )}
+          ))}
         </GoogleMap>
       </LoadScript>
-
-      {/* Card com informações da rota */}
-      {nearestDefibrillator && directions && (
-        <div className="absolute bottom-4 left-4 bg-white p-4 rounded-lg shadow-lg max-w-sm">
-          <h4 className="font-bold text-lg mb-2">Desfibrilador mais próximo:</h4>
-          <p className="text-sm mb-1">{nearestDefibrillator.nome}</p>
-          <p className="text-sm mb-1">
-            {nearestDefibrillator.rua}, {nearestDefibrillator.numero}
-          </p>
-          <p className="text-sm mb-2">{nearestDefibrillator.bairro}</p>
-          <p className="text-sm font-semibold">
-            Distância: {directions.routes[0].legs[0].distance?.text}
-          </p>
-          <p className="text-sm font-semibold">
-            Tempo estimado: {directions.routes[0].legs[0].duration?.text}
-          </p>
-        </div>
-      )}
     </div>
   )
 }
+
+export default GoogleMaps
